@@ -1,0 +1,15 @@
+[Unit]
+Description=LM Studio Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/lmstudio-telegram-bot
+ExecStart=%h/lmstudio-telegram-bot/start.sh
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
