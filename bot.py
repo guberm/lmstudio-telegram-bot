@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
+from PIL import Image
 from telegram import BotCommand, BotCommandScopeChat, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
@@ -39,6 +41,9 @@ MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "20"))
 LMSTUDIO_TIMEOUT_SECONDS = float(os.getenv("LMSTUDIO_TIMEOUT_SECONDS", "600"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 STATE_PATH = Path(os.getenv("STATE_PATH", str(ROOT / "data" / "state.json"))).expanduser()
+VISION_MAX_DIMENSION = int(os.getenv("VISION_MAX_DIMENSION", "768"))
+VISION_JPEG_QUALITY = int(os.getenv("VISION_JPEG_QUALITY", "82"))
+VISION_MAX_BYTES = int(os.getenv("VISION_MAX_BYTES", str(220 * 1024)))
 
 PROFILES: dict[str, str] = {
     "gemma4unc": "gemma4unc",
@@ -115,6 +120,51 @@ class ChatState:
 def profile_to_model(value: str) -> str:
     key = (value or DEFAULT_PROFILE).strip().lower()
     return PROFILES.get(key, value.strip() or PROFILES.get(DEFAULT_PROFILE, DEFAULT_PROFILE))
+
+
+def prepare_image_for_lmstudio(image_bytes: bytes, image_mime: str) -> tuple[bytes, str]:
+    mime = (image_mime or "image/jpeg").lower()
+    if not mime.startswith("image/"):
+        mime = "image/jpeg"
+
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            elif img.mode == "L":
+                img = img.convert("RGB")
+
+            width, height = img.size
+            max_dim = max(width, height)
+            if max_dim > VISION_MAX_DIMENSION:
+                scale = VISION_MAX_DIMENSION / float(max_dim)
+                img = img.resize((max(1, int(width * scale)), max(1, int(height * scale))), Image.Resampling.LANCZOS)
+
+            quality = max(45, min(95, VISION_JPEG_QUALITY))
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=quality, optimize=True)
+            data = out.getvalue()
+
+            while len(data) > VISION_MAX_BYTES and quality > 45:
+                quality -= 7
+                out = io.BytesIO()
+                img.save(out, format="JPEG", quality=quality, optimize=True)
+                data = out.getvalue()
+
+            if len(data) > VISION_MAX_BYTES:
+                current = img
+                for shrink in (0.85, 0.75, 0.65):
+                    resized = current.resize((max(1, int(current.width * shrink)), max(1, int(current.height * shrink))), Image.Resampling.LANCZOS)
+                    out = io.BytesIO()
+                    resized.save(out, format="JPEG", quality=max(45, quality), optimize=True)
+                    data = out.getvalue()
+                    current = resized
+                    if len(data) <= VISION_MAX_BYTES:
+                        break
+            return data, "image/jpeg"
+    except Exception:
+        log.exception("Failed to preprocess image for LM Studio; using original bytes")
+        return image_bytes, mime
 
 
 def load_state() -> dict[str, Any]:
@@ -837,6 +887,7 @@ async def chat_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             image_mime = "image/jpeg" if photo is not None else ((document.mime_type or "image/jpeg") if document else "image/jpeg")
             telegram_file = await source.get_file()
             image_bytes = bytes(await telegram_file.download_as_bytearray())
+            image_bytes, image_mime = prepare_image_for_lmstudio(image_bytes, image_mime)
             answer = await image_chat_completion(chat_state, prompt, image_bytes, image_mime=image_mime)
         except Exception as exc:
             log.exception("LM Studio image chat failed chat_id=%s model=%s", chat_id, getattr(chat_state, "model", None))

@@ -26,6 +26,7 @@ The live Michael deployment currently uses bot username `@mg_lmstudio_client_bot
 - Long model operations (`/load`, `/unload`, `/start_public`, `/stop_public`) acknowledge immediately, run in the background, and post the final result when finished.
 - Plain text chat also acknowledges immediately and posts the model answer later, so slow LM Studio generations do not look like a dead bot.
 - Supports the uncensored vision profile `qwenvisionunc` -> `qwenvl3bunc`.
+- Downscales/compresses Telegram images before LM Studio vision requests to fit low-VRAM hosts more reliably.
 - Chat timeouts report the exception class/details instead of a blank `LM Studio chat failed:` message.
 - Processes multiple Telegram updates concurrently so `/start`/`/status` are not stuck behind a model load.
 - `/profiles` opens inline buttons so Michael can tap a model, then tap Load / Unload / Start public / Stop public / Status / Use for chat.
