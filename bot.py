@@ -385,8 +385,10 @@ async def chat_completion(chat_state: ChatState, user_text: str) -> str:
     return data["choices"][0]["message"]["content"].strip()
 
 
-async def image_chat_completion(chat_state: ChatState, prompt: str, image_bytes: bytes) -> str:
+async def image_chat_completion(chat_state: ChatState, prompt: str, image_bytes: bytes, image_mime: str = "image/jpeg") -> str:
     chat_state.model = await choose_chat_model(chat_state)
+    image_b64 = base64.b64encode(image_bytes).decode("ascii")
+    image_data_url = f"data:{image_mime};base64,{image_b64}"
     messages: list[dict[str, Any]] = [{"role": "system", "content": chat_state.system_prompt}]
     messages.extend(chat_state.history[-MAX_HISTORY_MESSAGES:])
     messages.append(
@@ -394,7 +396,7 @@ async def image_chat_completion(chat_state: ChatState, prompt: str, image_bytes:
             "role": "user",
             "content": [
                 {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": base64.b64encode(image_bytes).decode("ascii")}},
+                {"type": "image_url", "image_url": {"url": image_data_url}},
             ],
         }
     )
@@ -832,9 +834,10 @@ async def chat_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             source = photo if photo is not None else document
             if source is None:
                 raise RuntimeError("No image source found in Telegram message")
+            image_mime = "image/jpeg" if photo is not None else ((document.mime_type or "image/jpeg") if document else "image/jpeg")
             telegram_file = await source.get_file()
             image_bytes = bytes(await telegram_file.download_as_bytearray())
-            answer = await image_chat_completion(chat_state, prompt, image_bytes)
+            answer = await image_chat_completion(chat_state, prompt, image_bytes, image_mime=image_mime)
         except Exception as exc:
             log.exception("LM Studio image chat failed chat_id=%s model=%s", chat_id, getattr(chat_state, "model", None))
             await context.bot.send_message(
