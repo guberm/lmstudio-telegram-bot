@@ -18,6 +18,7 @@ The live Michael deployment currently uses bot username `@mg_lmstudio_client_bot
 
 - Admin-only Telegram bot using polling - no webhook/domain/TLS needed.
 - Plain text chat via LM Studio `/v1/chat/completions`.
+- Photo and image-document analysis via LM Studio vision-capable models.
 - Per-chat conversation history in local JSON state.
 - Configurable system prompt.
 - Uses `lms ps` to prefer the selected **loaded** model; if no model is loaded, it loads the selected profile.

@@ -7,6 +7,7 @@ lmstudio-control.sh script. No Hermes/OpenAI provider is used.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -373,6 +374,34 @@ async def chat_completion(chat_state: ChatState, user_text: str) -> str:
         "model": chat_state.model,
         "messages": messages,
         "temperature": 0.7,
+        "max_tokens": 768,
+        "stream": False,
+    }
+    async with httpx.AsyncClient(timeout=LMSTUDIO_TIMEOUT_SECONDS) as client:
+        r = await client.post(f"{BASE_URL}/chat/completions", json=payload)
+        if r.status_code >= 400:
+            raise RuntimeError(f"LM Studio HTTP {r.status_code}: {r.text[:1000]}")
+        data = r.json()
+    return data["choices"][0]["message"]["content"].strip()
+
+
+async def image_chat_completion(chat_state: ChatState, prompt: str, image_bytes: bytes) -> str:
+    chat_state.model = await choose_chat_model(chat_state)
+    messages: list[dict[str, Any]] = [{"role": "system", "content": chat_state.system_prompt}]
+    messages.extend(chat_state.history[-MAX_HISTORY_MESSAGES:])
+    messages.append(
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": base64.b64encode(image_bytes).decode("ascii")}},
+            ],
+        }
+    )
+    payload = {
+        "model": chat_state.model,
+        "messages": messages,
+        "temperature": 0.2,
         "max_tokens": 768,
         "stream": False,
     }
@@ -775,6 +804,56 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     asyncio.create_task(finish())
 
 
+@require_admin
+async def chat_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+
+    photo = message.photo[-1] if message.photo else None
+    document = message.document if message.document and (message.document.mime_type or "").startswith("image/") else None
+    if not photo and not document:
+        return
+
+    prompt = (message.caption or "").strip() or "Опиши, что на изображении."
+    if not update.effective_chat:
+        return
+    chat_id = update.effective_chat.id
+    message_id = message.message_id
+    initial_state = get_chat_state(chat_id)
+    await message.reply_text(
+        f"Analyzing image with {initial_state.model}...\nI'll send the answer here when it finishes."
+    )
+
+    async def finish() -> None:
+        chat_state = get_chat_state(chat_id)
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            source = photo if photo is not None else document
+            if source is None:
+                raise RuntimeError("No image source found in Telegram message")
+            telegram_file = await source.get_file()
+            image_bytes = bytes(await telegram_file.download_as_bytearray())
+            answer = await image_chat_completion(chat_state, prompt, image_bytes)
+        except Exception as exc:
+            log.exception("LM Studio image chat failed chat_id=%s model=%s", chat_id, getattr(chat_state, "model", None))
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"LM Studio image chat failed: {format_exception(exc)}",
+                reply_to_message_id=message_id,
+            )
+            return
+        chat_state.history.extend([
+            {"role": "user", "content": f"[Image attached] {prompt}"},
+            {"role": "assistant", "content": answer},
+        ])
+        chat_state.history = chat_state.history[-MAX_HISTORY_MESSAGES:]
+        put_chat_state(chat_id, chat_state)
+        await send_long(context, chat_id, answer, reply_to_message_id=message_id)
+
+    asyncio.create_task(finish())
+
+
 async def post_init(app: Application) -> None:
     commands = [
         BotCommand("start", "start"),
@@ -832,6 +911,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("chatmodel", set_chat_model))
     app.add_handler(CommandHandler("run", run_raw))
     app.add_handler(CallbackQueryHandler(profile_callback, pattern=r"^prof:"))
+    app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & ~filters.COMMAND, chat_image))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
     return app
 
