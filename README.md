@@ -4,15 +4,15 @@ Admin-only Telegram client for a local LM Studio instance.
 
 ```text
 Telegram -> bot.py -> LM Studio OpenAI-compatible API
-                 └-> optional local control script for model/ngrok controls
+                 └-> lmstudio-control.sh for model/ngrok controls
 ```
 
 This bot is intentionally **not** a Hermes/OpenAI client. It talks only to:
 
 - LM Studio API: `http://127.0.0.1:1234/v1`
-- Optional local control script configured by `LMSTUDIO_CONTROL_SCRIPT`
+- Control script: `/home/mg/Desktop/LMStudioControl/lmstudio-control.sh`
 
-Access is restricted to the numeric Telegram user IDs configured in `ADMIN_IDS`.
+The live Michael deployment currently uses bot username `@mg_lmstudio_client_bot` and is restricted to Michael's Telegram user id via `ADMIN_IDS`.
 
 ## Features
 
@@ -24,8 +24,10 @@ Access is restricted to the numeric Telegram user IDs configured in `ADMIN_IDS`.
 - Exposes the useful `lmstudio-control.sh` actions through safe Telegram commands.
 - Long model operations (`/load`, `/unload`, `/start_public`, `/stop_public`) acknowledge immediately, run in the background, and post the final result when finished.
 - Plain text chat also acknowledges immediately and posts the model answer later, so slow LM Studio generations do not look like a dead bot.
+- Supports the uncensored vision profile `qwenvisionunc` -> `qwenvl3bunc`.
 - Chat timeouts report the exception class/details instead of a blank `LM Studio chat failed:` message.
 - Processes multiple Telegram updates concurrently so `/start`/`/status` are not stuck behind a model load.
+- `/profiles` opens inline buttons so Michael can tap a model, then tap Load / Unload / Start public / Stop public / Status / Use for chat.
 - User systemd service + `flock` wrapper for restartable deployment.
 - Telegram commands are scoped only to configured admin chat IDs.
 
@@ -46,7 +48,11 @@ Commit only `.env.example` with placeholder values.
 ## Requirements
 
 - Linux host running LM Studio with local API enabled on port `1234`.
-- Optional `lmstudio-control.sh`-compatible helper script if you want Telegram commands for loading/unloading models or managing ngrok. Configure its absolute path with `LMSTUDIO_CONTROL_SCRIPT`.
+- `lmstudio-control.sh` available, by default:
+
+  ```bash
+  /home/mg/Desktop/LMStudioControl/lmstudio-control.sh
+  ```
 
 - Python 3.11+.
 - `uv` or Python venv tooling.
@@ -92,11 +98,11 @@ Required fields:
 
 ```env
 TELEGRAM_BOT_TOKEN=REPLACE_WITH_BOTFATHER_TOKEN
-ADMIN_IDS=123456789
+ADMIN_IDS=29990301
 LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
-LMSTUDIO_CONTROL_SCRIPT=/absolute/path/to/lmstudio-control.sh
+LMSTUDIO_CONTROL_SCRIPT=/home/mg/Desktop/LMStudioControl/lmstudio-control.sh
 DEFAULT_PROFILE=mythosnano
-DEFAULT_SYSTEM_PROMPT=You are a concise local LM Studio assistant. Answer in the user's language when clear.
+DEFAULT_SYSTEM_PROMPT=Ты личный локальный LM Studio ассистент Michael. Отвечай прямо, полезно и кратко. Если пользователь пишет по-русски, отвечай по-русски.
 MAX_HISTORY_MESSAGES=20
 LMSTUDIO_TIMEOUT_SECONDS=600
 LOG_LEVEL=INFO
@@ -120,7 +126,7 @@ curl -fsS http://127.0.0.1:1234/v1/models | python3 -m json.tool | head
 Verify the control script:
 
 ```bash
-NO_PAUSE=1 "$LMSTUDIO_CONTROL_SCRIPT" status mythosnano
+NO_PAUSE=1 /home/mg/Desktop/LMStudioControl/lmstudio-control.sh status mythosnano
 ```
 
 ### 5. Run manually
@@ -174,7 +180,7 @@ Plain text messages are sent to LM Studio chat completions.
 | `/start` | Start/check the bot |
 | `/help` | Show command list |
 | `/health` | Check LM Studio API and available models |
-| `/profiles` or `/models` | List control-script model profiles |
+| `/profiles` or `/models` | Show model buttons and open per-profile actions |
 | `/profile <key>` | Set selected profile and chat model mapping |
 | `/current` | Show current profile/model/state |
 | `/reset` | Clear chat history |
@@ -206,6 +212,7 @@ The bot maps friendly profile keys to LM Studio model IDs:
 | Profile key | Model id |
 |---|---|
 | `mythosnano`, `mythos`, `nano` | `mythosnanoq6` |
+| `qwenvisionunc`, `qwenvision`, `qwenvision3b`, `qwenvl`, `qwenvl3b`, `qwenvl3bunc`, `cyberneurova` | `qwenvl3bunc` |
 | `qwythos`, `qwythos9b` | `qwythos9bq5` |
 | `coder`, `coderq4` | `gemma4coderq4` |
 | `coderq3` | `gemma4coderq3` |
@@ -219,6 +226,7 @@ For chat, the bot checks `lms ps` and uses the selected loaded model. If nothing
 - This bot is safest when run on the same host as LM Studio and pointed at `127.0.0.1`.
 - Do not point the bot at a public ngrok URL unless you intentionally want remote LM Studio access.
 - `start_public`/`stop_public` can change ngrok URLs.
+- `/profiles` is the удобный flow: tap a profile, then tap the action button instead of typing `/load <profile>`.
 - Logs are in `logs/bot.log`; runtime chat state is in `data/state.json`.
 - Both are local runtime files and intentionally ignored by git.
 
@@ -241,10 +249,10 @@ systemctl --user is-active lmstudio-telegram-bot.service
 Then verify through Telegram from an allowed admin account:
 
 1. `/start`
-2. `/health`
-3. `/profile mythosnano`
+2. `/profiles` and tap the `Qwen VL 3B` buttons for `Load` / `Use for chat`
+3. `/health`
 4. `/current`
-5. `/status`
+5. `/status qwenvisionunc`
 6. Send a plain text prompt such as `Ответь одним словом: ping`
 
 ## Troubleshooting
@@ -287,13 +295,13 @@ Check loaded models:
 If multiple models are loaded or one is stuck generating, unload the unwanted one:
 
 ```bash
-NO_PAUSE=1 "$LMSTUDIO_CONTROL_SCRIPT" unload-model qwythos
+NO_PAUSE=1 ~/Desktop/LMStudioControl/lmstudio-control.sh unload-model qwythos
 ```
 
 Then load the desired profile:
 
 ```bash
-NO_PAUSE=1 "$LMSTUDIO_CONTROL_SCRIPT" load-model mythosnano
+NO_PAUSE=1 ~/Desktop/LMStudioControl/lmstudio-control.sh load-model mythosnano
 ```
 
 ### LM Studio API unavailable
@@ -304,6 +312,12 @@ Open LM Studio and enable/start the local server on port `1234`, then test:
 curl -fsS http://127.0.0.1:1234/v1/models
 ```
 
-## License
+## Current Michael deployment snapshot
 
-MIT. See [LICENSE](LICENSE).
+- Local path: `/home/mg/lmstudio-telegram-bot`
+- Bot username: `@mg_lmstudio_client_bot`
+- Service: `lmstudio-telegram-bot.service`
+- Default profile: `mythosnano`
+- Additional uncensored vision profile: `qwenvisionunc` -> `qwenvl3bunc`
+- Admin-only access: configured via `ADMIN_IDS`
+- Secrets file: `.env` mode `600`, not committed

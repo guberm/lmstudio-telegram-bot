@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Admin-only Telegram client for local LM Studio.
 
-Telegram -> this bot -> LM Studio OpenAI-compatible API and an optional
-local control script. No hosted OpenAI/Hermes provider is used.
+Telegram -> this bot -> LM Studio OpenAI-compatible API and Michael's
+lmstudio-control.sh script. No Hermes/OpenAI provider is used.
 """
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from telegram import BotCommand, BotCommandScopeChat, Update
+from telegram import BotCommand, BotCommandScopeChat, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -28,11 +28,11 @@ load_dotenv(ROOT / ".env")
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_IDS = {int(part) for part in re.split(r"[,\s]+", os.getenv("ADMIN_IDS", "")) if part.strip().isdigit()}
 BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1").rstrip("/")
-CONTROL_SCRIPT = Path(os.getenv("LMSTUDIO_CONTROL_SCRIPT", str(ROOT / "lmstudio-control.sh"))).expanduser()
+CONTROL_SCRIPT = Path(os.getenv("LMSTUDIO_CONTROL_SCRIPT", "/home/mg/Desktop/LMStudioControl/lmstudio-control.sh")).expanduser()
 DEFAULT_PROFILE = os.getenv("DEFAULT_PROFILE", "mythosnano").strip() or "mythosnano"
 DEFAULT_SYSTEM_PROMPT = os.getenv(
     "DEFAULT_SYSTEM_PROMPT",
-    "You are a concise local LM Studio assistant. Answer in the user's language when clear.",
+    "Ты личный локальный LM Studio ассистент Michael. Отвечай прямо, полезно и кратко.",
 )
 MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "20"))
 LMSTUDIO_TIMEOUT_SECONDS = float(os.getenv("LMSTUDIO_TIMEOUT_SECONDS", "600"))
@@ -52,7 +52,24 @@ PROFILES: dict[str, str] = {
     "mythosnano": "mythosnanoq6",
     "mythos": "mythosnanoq6",
     "nano": "mythosnanoq6",
+    "qwenvisionunc": "qwenvl3bunc",
+    "qwenvision": "qwenvl3bunc",
+    "qwenvision3b": "qwenvl3bunc",
+    "qwenvl": "qwenvl3bunc",
+    "qwenvl3b": "qwenvl3bunc",
+    "qwenvl3bunc": "qwenvl3bunc",
+    "cyberneurova": "qwenvl3bunc",
 }
+
+PROFILE_MENU: list[tuple[str, str]] = [
+    ("gemma4unc", "Gemma4Unc"),
+    ("uncensored", "OpenYourMind"),
+    ("coder", "Coder Q4"),
+    ("coderq3", "Coder Q3"),
+    ("qwythos", "Qwythos Q5"),
+    ("mythosnano", "Mythos Nano"),
+    ("qwenvisionunc", "Qwen VL 3B"),
+]
 
 SCRIPT_ACTIONS_WITH_PROFILE = {
     "summary": "menu-summary",
@@ -192,6 +209,58 @@ def format_exception(exc: BaseException) -> str:
     return f"{name}: {detail}"
 
 
+def normalize_profile(value: str | None) -> str:
+    return (value or DEFAULT_PROFILE).strip().lower() or DEFAULT_PROFILE
+
+
+def profile_list_text(chat_state: ChatState) -> str:
+    return (
+        "Profiles - tap a model to open actions.\n"
+        f"Current chat profile: {chat_state.profile}\n"
+        f"Current chat model: {chat_state.model}"
+    )
+
+
+def profile_action_text(chat_state: ChatState, profile: str) -> str:
+    model = profile_to_model(profile)
+    marker = "yes" if normalize_profile(chat_state.profile) == profile else "no"
+    return (
+        f"Profile: {profile}\n"
+        f"Model: {model}\n"
+        f"Selected for chat: {marker}\n\n"
+        "Choose action:"
+    )
+
+
+def profile_list_keyboard(current_profile: str) -> InlineKeyboardMarkup:
+    rows = []
+    current = normalize_profile(current_profile)
+    for key, label in PROFILE_MENU:
+        prefix = "✅ " if key == current else ""
+        rows.append([InlineKeyboardButton(f"{prefix}{label}", callback_data=f"prof:show:{key}")])
+    rows.append([InlineKeyboardButton("Refresh", callback_data="prof:refresh")])
+    return InlineKeyboardMarkup(rows)
+
+
+def profile_action_keyboard(profile: str, current_profile: str) -> InlineKeyboardMarkup:
+    selected_label = "✅ Use for chat" if normalize_profile(current_profile) == profile else "Use for chat"
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Load", callback_data=f"prof:load:{profile}"),
+            InlineKeyboardButton("Unload", callback_data=f"prof:unload:{profile}"),
+        ],
+        [
+            InlineKeyboardButton("Start public", callback_data=f"prof:start:{profile}"),
+            InlineKeyboardButton("Stop public", callback_data=f"prof:stop:{profile}"),
+        ],
+        [
+            InlineKeyboardButton("Status", callback_data=f"prof:status:{profile}"),
+            InlineKeyboardButton(selected_label, callback_data=f"prof:set:{profile}"),
+        ],
+        [InlineKeyboardButton("← Back", callback_data="prof:back")],
+    ])
+
+
 async def run_control(action: str, profile: str | None = None, timeout: int | None = None) -> tuple[int, str]:
     if not CONTROL_SCRIPT.exists():
         return 127, f"Control script not found: {CONTROL_SCRIPT}"
@@ -322,7 +391,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "LM Studio bot ready.\n"
         f"Profile: {chat_state.profile}\n"
         f"Chat model: {chat_state.model}\n\n"
-        "Send text to chat with LM Studio, or /help for controls."
+        "Send text to chat with LM Studio, /profiles for buttons, or /help for controls."
     )
 
 
@@ -331,7 +400,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         "Commands:\n"
         "/health - check LM Studio API\n"
-        "/profiles - model profiles from script\n"
+        "/profiles - buttons for model actions\n"
         "/profile <key> - set default script/chat profile\n"
         "/current - current bot state\n"
         "/summary - script menu summary\n"
@@ -375,7 +444,7 @@ async def current(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 @require_admin
 async def set_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.effective_message.reply_text("Usage: /profile mythosnano")
+        await update.effective_message.reply_text("Usage: /profile qwenvisionunc")
         return
     profile = context.args[0].strip().lower()
     chat_state = get_chat_state(update.effective_chat.id)
@@ -466,14 +535,135 @@ async def script_reply(
     await finish()
 
 
+async def reply_profile_list(update: Update) -> None:
+    chat_state = get_chat_state(update.effective_chat.id)
+    await update.effective_message.reply_text(
+        profile_list_text(chat_state),
+        reply_markup=profile_list_keyboard(chat_state.profile),
+    )
+
+
+async def run_profile_callback_action(
+    query,
+    context: ContextTypes.DEFAULT_TYPE,
+    action: str,
+    profile: str,
+    *,
+    remember_profile: bool = False,
+    background: bool = False,
+) -> None:
+    chat_id = query.message.chat.id
+    reply_to_message_id = query.message.message_id
+    profile = normalize_profile(profile)
+    if remember_profile:
+        chat_state = get_chat_state(chat_id)
+        chat_state.profile = profile
+        chat_state.model = profile_to_model(profile)
+        put_chat_state(chat_id, chat_state)
+
+    async def finish() -> None:
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            code, output = await run_control(action, profile, timeout=900)
+            prefix = "OK" if code == 0 else f"FAILED exit={code}"
+            await send_long(
+                context,
+                chat_id,
+                f"{prefix}: {action} {profile}\n\n{output}",
+                reply_to_message_id=reply_to_message_id,
+            )
+        except Exception as exc:
+            log.exception("profile callback action failed action=%s profile=%s", action, profile)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"FAILED: {action} {profile}\n\n{format_exception(exc)}",
+                reply_to_message_id=reply_to_message_id,
+            )
+
+    if background:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Started: {action} {profile}\nI'll send the result here when it finishes.",
+            reply_to_message_id=reply_to_message_id,
+        )
+        asyncio.create_task(finish())
+        return
+
+    await finish()
+
+
 @require_admin
 async def profiles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await script_reply(update, context, "models", False)
+    await reply_profile_list(update)
 
 
 @require_admin
 async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await script_reply(update, context, "menu-summary", True)
+
+
+@require_admin
+async def profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.message or not update.effective_chat:
+        return
+    await query.answer()
+    data = query.data or ""
+    parts = data.split(":", 2)
+    if len(parts) < 2 or parts[0] != "prof":
+        return
+
+    chat_id = update.effective_chat.id
+    chat_state = get_chat_state(chat_id)
+    verb = parts[1]
+    profile = normalize_profile(parts[2]) if len(parts) > 2 else chat_state.profile
+
+    if verb in {"refresh", "back"}:
+        await query.edit_message_text(
+            profile_list_text(chat_state),
+            reply_markup=profile_list_keyboard(chat_state.profile),
+        )
+        return
+    if verb == "show":
+        await query.edit_message_text(
+            profile_action_text(chat_state, profile),
+            reply_markup=profile_action_keyboard(profile, chat_state.profile),
+        )
+        return
+    if verb == "set":
+        chat_state.profile = profile
+        chat_state.model = profile_to_model(profile)
+        put_chat_state(chat_id, chat_state)
+        chat_state = get_chat_state(chat_id)
+        await query.edit_message_text(
+            profile_action_text(chat_state, profile),
+            reply_markup=profile_action_keyboard(profile, chat_state.profile),
+        )
+        return
+
+    action_map = {
+        "load": ("load-model", True, True),
+        "unload": ("unload-model", False, True),
+        "start": ("start-public", True, True),
+        "stop": ("stop-public", False, True),
+        "status": ("status", False, False),
+    }
+    if verb not in action_map:
+        return
+    action, remember_profile, background = action_map[verb]
+    await run_profile_callback_action(
+        query,
+        context,
+        action,
+        profile,
+        remember_profile=remember_profile,
+        background=background,
+    )
+    chat_state = get_chat_state(chat_id)
+    await query.edit_message_text(
+        profile_action_text(chat_state, profile),
+        reply_markup=profile_action_keyboard(profile, chat_state.profile),
+    )
 
 
 @require_admin
@@ -606,7 +796,7 @@ async def post_init(app: Application) -> None:
         BotCommand("chatmodel", "set chat model id"),
         BotCommand("run", "raw allowed script action"),
     ]
-    # Hide commands from everyone except configured admin chat menus.
+    # Hide commands from everyone except Michael/admin chat menus.
     await app.bot.delete_my_commands()
     for admin_id in ADMIN_IDS:
         await app.bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id=admin_id))
@@ -641,6 +831,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("system", system_prompt))
     app.add_handler(CommandHandler("chatmodel", set_chat_model))
     app.add_handler(CommandHandler("run", run_raw))
+    app.add_handler(CallbackQueryHandler(profile_callback, pattern=r"^prof:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
     return app
 
