@@ -331,7 +331,10 @@ def profile_list_keyboard(current_profile: str) -> InlineKeyboardMarkup:
     for key, label in PROFILE_MENU:
         prefix = "✅ " if key == current else ""
         rows.append([InlineKeyboardButton(f"{prefix}{label}", callback_data=f"prof:show:{key}")])
-    rows.append([InlineKeyboardButton("Refresh", callback_data="prof:refresh")])
+    rows.append([
+        InlineKeyboardButton("New session", callback_data="prof:newsession"),
+        InlineKeyboardButton("Refresh", callback_data="prof:refresh"),
+    ])
     return InlineKeyboardMarkup(rows)
 
 
@@ -350,6 +353,7 @@ def profile_action_keyboard(profile: str, current_profile: str) -> InlineKeyboar
             InlineKeyboardButton("Status", callback_data=f"prof:status:{profile}"),
             InlineKeyboardButton(selected_label, callback_data=f"prof:set:{profile}"),
         ],
+        [InlineKeyboardButton("New session", callback_data=f"prof:newsession:{profile}")],
         [InlineKeyboardButton("← Back", callback_data="prof:back")],
     ])
 
@@ -541,7 +545,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/ngrok - ngrok status\n"
         "/url - current ngrok URL\n"
         "/start_ngrok /stop_ngrok - tunnel only\n"
-        "/reset - clear chat context\n"
+        "/new_session or /new - clear chat context, keep selected profile/model\n"
+        "/reset - alias for /new_session\n"
         "/system <prompt> - set system prompt\n"
         "/chatmodel <model-or-profile> - set model id for chat\n"
         "/run <script-action> [profile] - raw allowed script action\n\n"
@@ -597,10 +602,17 @@ async def set_chat_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 @require_admin
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or not update.effective_message:
+        return
     chat_state = get_chat_state(update.effective_chat.id)
+    old_count = len(chat_state.history)
     chat_state.history = []
     put_chat_state(update.effective_chat.id, chat_state)
-    await update.effective_message.reply_text("Chat context reset.")
+    await update.effective_message.reply_text(
+        f"New session started. Cleared {old_count} history message(s).\n"
+        f"Profile: {chat_state.profile}\n"
+        f"Chat model: {chat_state.model}"
+    )
 
 
 @require_admin
@@ -768,6 +780,26 @@ async def profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             profile_action_text(chat_state, profile),
             reply_markup=profile_action_keyboard(profile, chat_state.profile),
         )
+        return
+    if verb == "newsession":
+        old_count = len(chat_state.history)
+        chat_state.history = []
+        put_chat_state(chat_id, chat_state)
+        text = (
+            f"New session started. Cleared {old_count} history message(s).\n"
+            f"Profile: {chat_state.profile}\n"
+            f"Chat model: {chat_state.model}"
+        )
+        if len(parts) > 2:
+            await query.edit_message_text(
+                text + "\n\n" + profile_action_text(chat_state, profile),
+                reply_markup=profile_action_keyboard(profile, chat_state.profile),
+            )
+        else:
+            await query.edit_message_text(
+                text + "\n\n" + profile_list_text(chat_state),
+                reply_markup=profile_list_keyboard(chat_state.profile),
+            )
         return
 
     action_map = {
@@ -972,6 +1004,7 @@ async def post_init(app: Application) -> None:
         BotCommand("stop_public", "stop public + unload"),
         BotCommand("ngrok", "ngrok status"),
         BotCommand("url", "current ngrok URL"),
+        BotCommand("new_session", "new chat session"),
         BotCommand("reset", "reset chat"),
         BotCommand("system", "set system prompt"),
         BotCommand("chatmodel", "set chat model id"),
@@ -1008,6 +1041,8 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("url", url))
     app.add_handler(CommandHandler("start_ngrok", start_ngrok))
     app.add_handler(CommandHandler("stop_ngrok", stop_ngrok))
+    app.add_handler(CommandHandler("new_session", reset))
+    app.add_handler(CommandHandler("new", reset))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("system", system_prompt))
     app.add_handler(CommandHandler("chatmodel", set_chat_model))

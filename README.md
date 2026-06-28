@@ -31,6 +31,7 @@ The live Michael deployment currently uses bot username `@mg_lmstudio_client_bot
 - Chat timeouts report the exception class/details instead of a blank `LM Studio chat failed:` message.
 - Processes multiple Telegram updates concurrently so `/start`/`/status` are not stuck behind a model load.
 - `/profiles` opens inline buttons so Michael can tap a model, then tap Load / Unload / Start public / Stop public / Status / Use for chat.
+- `/profiles` and each profile action screen include a `New session` button that clears chat history while preserving the selected profile/model; `/new_session`, `/new`, and `/reset` do the same from commands.
 - User systemd service + `flock` wrapper for restartable deployment.
 - Telegram commands are scoped only to configured admin chat IDs.
 
@@ -186,7 +187,7 @@ Plain text messages are sent to LM Studio chat completions.
 | `/profiles` or `/models` | Show model buttons and open per-profile actions |
 | `/profile <key>` | Set selected profile and chat model mapping |
 | `/current` | Show current profile/model/state |
-| `/reset` | Clear chat history |
+| `/new_session`, `/new`, or `/reset` | Clear chat history while preserving selected profile/model |
 | `/system <prompt>` | Set system prompt for this chat |
 | `/chatmodel <model-or-profile>` | Override chat model id/profile |
 
