@@ -26,6 +26,7 @@ The live Michael deployment currently uses bot username `@mg_lmstudio_client_bot
 - Long model operations (`/load`, `/unload`, `/start_public`, `/stop_public`) acknowledge immediately, run in the background, and post the final result when finished.
 - Plain text chat also acknowledges immediately and posts the model answer later, so slow LM Studio generations do not look like a dead bot.
 - Supports the uncensored vision profile `qwenvisionunc` -> `qwenvl3bunc`.
+- Supports external profile `chatgptweb` -> `chatgpt-5.5-high-web` via `https://codex.guber.dev/v1` using `CHATGPT_WEB_PROVIDER_API_KEY` from the Linux host environment/Hermes `.env`.
 - Downscales/compresses Telegram images before LM Studio vision requests to fit low-VRAM hosts more reliably.
 - Chat timeouts report the exception class/details instead of a blank `LM Studio chat failed:` message.
 - Processes multiple Telegram updates concurrently so `/start`/`/status` are not stuck behind a model load.
@@ -323,3 +324,11 @@ curl -fsS http://127.0.0.1:1234/v1/models
 - Additional uncensored vision profile: `qwenvisionunc` -> `qwenvl3bunc`
 - Admin-only access: configured via `ADMIN_IDS`
 - Secrets file: `.env` mode `600`, not committed
+
+Optional external provider fields:
+
+```env
+CHATGPT_WEB_BASE_URL=https://codex.guber.dev/v1
+CHATGPT_WEB_MODEL=chatgpt-5.5-high-web
+# token can stay in ~/.hermes/.env as CHATGPT_WEB_PROVIDER_API_KEY
+```

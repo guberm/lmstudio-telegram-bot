@@ -31,6 +31,9 @@ load_dotenv(ROOT / ".env")
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_IDS = {int(part) for part in re.split(r"[,\s]+", os.getenv("ADMIN_IDS", "")) if part.strip().isdigit()}
 BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1").rstrip("/")
+CHATGPT_WEB_BASE_URL = os.getenv("CHATGPT_WEB_BASE_URL", "https://codex.guber.dev/v1").rstrip("/")
+CHATGPT_WEB_MODEL = os.getenv("CHATGPT_WEB_MODEL", "chatgpt-5.5-high-web").strip() or "chatgpt-5.5-high-web"
+HERMES_ENV_PATH = Path(os.getenv("HERMES_ENV_PATH", str(Path.home() / ".hermes" / ".env"))).expanduser()
 CONTROL_SCRIPT = Path(os.getenv("LMSTUDIO_CONTROL_SCRIPT", "/home/mg/Desktop/LMStudioControl/lmstudio-control.sh")).expanduser()
 DEFAULT_PROFILE = os.getenv("DEFAULT_PROFILE", "mythosnano").strip() or "mythosnano"
 DEFAULT_SYSTEM_PROMPT = os.getenv(
@@ -65,6 +68,11 @@ PROFILES: dict[str, str] = {
     "qwenvl3b": "qwenvl3bunc",
     "qwenvl3bunc": "qwenvl3bunc",
     "cyberneurova": "qwenvl3bunc",
+    "chatgptweb": CHATGPT_WEB_MODEL,
+    "chatgpt_web": CHATGPT_WEB_MODEL,
+    "chatgpt": CHATGPT_WEB_MODEL,
+    "chatgpt-5.5-high-web": CHATGPT_WEB_MODEL,
+    "codexguber": CHATGPT_WEB_MODEL,
 }
 
 PROFILE_MENU: list[tuple[str, str]] = [
@@ -75,6 +83,7 @@ PROFILE_MENU: list[tuple[str, str]] = [
     ("qwythos", "Qwythos Q5"),
     ("mythosnano", "Mythos Nano"),
     ("qwenvisionunc", "Qwen VL 3B"),
+    ("chatgptweb", "ChatGPT Web"),
 ]
 
 SCRIPT_ACTIONS_WITH_PROFILE = {
@@ -120,6 +129,39 @@ class ChatState:
 def profile_to_model(value: str) -> str:
     key = (value or DEFAULT_PROFILE).strip().lower()
     return PROFILES.get(key, value.strip() or PROFILES.get(DEFAULT_PROFILE, DEFAULT_PROFILE))
+
+
+def is_external_profile(profile: str | None) -> bool:
+    return normalize_profile(profile) in {"chatgptweb", "chatgpt_web", "chatgpt", "chatgpt-5.5-high-web", "codexguber"}
+
+
+def profile_base_url(profile: str | None) -> str:
+    return CHATGPT_WEB_BASE_URL if is_external_profile(profile) else BASE_URL
+
+
+def read_env_value(path: Path, key: str) -> str:
+    try:
+        for line in path.read_text(errors="ignore").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            left, right = line.split("=", 1)
+            if left.strip() == key:
+                return right.strip().strip('"').strip("'")
+    except FileNotFoundError:
+        return ""
+    except Exception:
+        log.exception("Failed reading env value %s from %s", key, path)
+    return ""
+
+
+def auth_headers_for_profile(profile: str | None) -> dict[str, str]:
+    if not is_external_profile(profile):
+        return {}
+    key = os.getenv("CHATGPT_WEB_PROVIDER_API_KEY", "").strip() or read_env_value(HERMES_ENV_PATH, "CHATGPT_WEB_PROVIDER_API_KEY")
+    if not key:
+        raise RuntimeError(f"CHATGPT_WEB_PROVIDER_API_KEY is missing in environment or {HERMES_ENV_PATH}")
+    return {"Authorization": "Bearer " + key}
 
 
 def prepare_image_for_lmstudio(image_bytes: bytes, image_mime: str) -> tuple[bytes, str]:
@@ -373,6 +415,8 @@ async def loaded_lmstudio_models() -> list[str]:
 
 async def choose_chat_model(chat_state: ChatState) -> str:
     wanted = profile_to_model(chat_state.profile)
+    if is_external_profile(chat_state.profile):
+        return wanted
     loaded = await loaded_lmstudio_models()
     if wanted in loaded:
         return wanted
@@ -427,10 +471,12 @@ async def chat_completion(chat_state: ChatState, user_text: str) -> str:
         "max_tokens": 768,
         "stream": False,
     }
+    base_url = profile_base_url(chat_state.profile)
+    headers = auth_headers_for_profile(chat_state.profile)
     async with httpx.AsyncClient(timeout=LMSTUDIO_TIMEOUT_SECONDS) as client:
-        r = await client.post(f"{BASE_URL}/chat/completions", json=payload)
+        r = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
         if r.status_code >= 400:
-            raise RuntimeError(f"LM Studio HTTP {r.status_code}: {r.text[:1000]}")
+            raise RuntimeError(f"Provider HTTP {r.status_code}: {r.text[:1000]}")
         data = r.json()
     return data["choices"][0]["message"]["content"].strip()
 
@@ -457,10 +503,12 @@ async def image_chat_completion(chat_state: ChatState, prompt: str, image_bytes:
         "max_tokens": 768,
         "stream": False,
     }
+    base_url = profile_base_url(chat_state.profile)
+    headers = auth_headers_for_profile(chat_state.profile)
     async with httpx.AsyncClient(timeout=LMSTUDIO_TIMEOUT_SECONDS) as client:
-        r = await client.post(f"{BASE_URL}/chat/completions", json=payload)
+        r = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
         if r.status_code >= 400:
-            raise RuntimeError(f"LM Studio HTTP {r.status_code}: {r.text[:1000]}")
+            raise RuntimeError(f"Provider HTTP {r.status_code}: {r.text[:1000]}")
         data = r.json()
     return data["choices"][0]["message"]["content"].strip()
 
@@ -517,7 +565,7 @@ async def current(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Profile: {chat_state.profile}\n"
         f"Chat model: {chat_state.model}\n"
         f"History messages: {len(chat_state.history)}\n"
-        f"Base URL: {BASE_URL}\n"
+        f"Base URL: {profile_base_url(chat_state.profile)}\n"
         f"Control script: {CONTROL_SCRIPT}"
     )
 
