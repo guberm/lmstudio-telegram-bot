@@ -10,9 +10,9 @@ Telegram -> bot.py -> LM Studio OpenAI-compatible API
 ## Available profiles
 
 - `gemma4unc` — the only local LM Studio LLM profile and default/fallback
-- `chatgptweb` — external `chatgpt-5.5-high-web` provider at `https://codex.guber.dev/v1`
+- `chatgptweb` — external `chatgpt-5.6-sol-high-web` provider at `https://codex.guber.dev/v1`
 
-External aliases (`chatgpt_web`, `chatgpt`, `chatgpt-5.5-high-web`, `codexguber`) normalize to `chatgptweb`. Unknown or retired profile values normalize to `gemma4unc` and are never passed to the Linux controller. At startup, persisted chat records are migrated atomically to an available canonical profile/model while preserving system prompts and bounded history.
+External aliases (`chatgpt_web`, `chatgpt`, the retired `chatgpt-5.5-high-web`, `chatgpt-5.6-sol-high-web`, `codexguber`) normalize to `chatgptweb`. Unknown or retired profile values normalize to `gemma4unc` and are never passed to the Linux controller. At startup, persisted chat records are migrated atomically to an available canonical profile/model while preserving system prompts and bounded history.
 
 ## Features
 

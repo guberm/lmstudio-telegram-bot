@@ -32,7 +32,7 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_IDS = {int(part) for part in re.split(r"[,\s]+", os.getenv("ADMIN_IDS", "")) if part.strip().isdigit()}
 BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1").rstrip("/")
 CHATGPT_WEB_BASE_URL = os.getenv("CHATGPT_WEB_BASE_URL", "https://codex.guber.dev/v1").rstrip("/")
-CHATGPT_WEB_MODEL = os.getenv("CHATGPT_WEB_MODEL", "chatgpt-5.5-high-web").strip() or "chatgpt-5.5-high-web"
+CHATGPT_WEB_MODEL = os.getenv("CHATGPT_WEB_MODEL", "chatgpt-5.6-sol-high-web").strip() or "chatgpt-5.6-sol-high-web"
 HERMES_ENV_PATH = Path(os.getenv("HERMES_ENV_PATH", str(Path.home() / ".hermes" / ".env"))).expanduser()
 CONTROL_SCRIPT = Path(os.getenv("LMSTUDIO_CONTROL_SCRIPT", "/home/mg/Desktop/LMStudioControl/lmstudio-control.sh")).expanduser()
 DEFAULT_PROFILE = os.getenv("DEFAULT_PROFILE", "gemma4unc").strip().lower() or "gemma4unc"
@@ -54,6 +54,7 @@ PROFILES: dict[str, str] = {
     "chatgpt_web": CHATGPT_WEB_MODEL,
     "chatgpt": CHATGPT_WEB_MODEL,
     "chatgpt-5.5-high-web": CHATGPT_WEB_MODEL,
+    "chatgpt-5.6-sol-high-web": CHATGPT_WEB_MODEL,
     "codexguber": CHATGPT_WEB_MODEL,
 }
 
@@ -63,6 +64,7 @@ PROFILE_ALIASES: dict[str, str] = {
     "chatgpt_web": "chatgptweb",
     "chatgpt": "chatgptweb",
     "chatgpt-5.5-high-web": "chatgptweb",
+    "chatgpt-5.6-sol-high-web": "chatgptweb",
     "codexguber": "chatgptweb",
 }
 DEFAULT_PROFILE = PROFILE_ALIASES.get(DEFAULT_PROFILE, "gemma4unc")
