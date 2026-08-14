@@ -35,7 +35,7 @@ CHATGPT_WEB_BASE_URL = os.getenv("CHATGPT_WEB_BASE_URL", "https://codex.guber.de
 CHATGPT_WEB_MODEL = os.getenv("CHATGPT_WEB_MODEL", "chatgpt-5.5-high-web").strip() or "chatgpt-5.5-high-web"
 HERMES_ENV_PATH = Path(os.getenv("HERMES_ENV_PATH", str(Path.home() / ".hermes" / ".env"))).expanduser()
 CONTROL_SCRIPT = Path(os.getenv("LMSTUDIO_CONTROL_SCRIPT", "/home/mg/Desktop/LMStudioControl/lmstudio-control.sh")).expanduser()
-DEFAULT_PROFILE = os.getenv("DEFAULT_PROFILE", "mythosnano").strip() or "mythosnano"
+DEFAULT_PROFILE = os.getenv("DEFAULT_PROFILE", "gemma4unc").strip().lower() or "gemma4unc"
 DEFAULT_SYSTEM_PROMPT = os.getenv(
     "DEFAULT_SYSTEM_PROMPT",
     "Ты личный локальный LM Studio ассистент Michael. Отвечай прямо, полезно и кратко.",
@@ -50,24 +50,6 @@ VISION_MAX_BYTES = int(os.getenv("VISION_MAX_BYTES", str(220 * 1024)))
 
 PROFILES: dict[str, str] = {
     "gemma4unc": "gemma4unc",
-    "uncensored": "oymuncq4",
-    "openyourmind": "oymuncq4",
-    "oym": "oymuncq4",
-    "coder": "gemma4coderq4",
-    "coderq4": "gemma4coderq4",
-    "coderq3": "gemma4coderq3",
-    "qwythos": "qwythos9bq5",
-    "qwythos9b": "qwythos9bq5",
-    "mythosnano": "mythosnanoq6",
-    "mythos": "mythosnanoq6",
-    "nano": "mythosnanoq6",
-    "qwenvisionunc": "qwenvl3bunc",
-    "qwenvision": "qwenvl3bunc",
-    "qwenvision3b": "qwenvl3bunc",
-    "qwenvl": "qwenvl3bunc",
-    "qwenvl3b": "qwenvl3bunc",
-    "qwenvl3bunc": "qwenvl3bunc",
-    "cyberneurova": "qwenvl3bunc",
     "chatgptweb": CHATGPT_WEB_MODEL,
     "chatgpt_web": CHATGPT_WEB_MODEL,
     "chatgpt": CHATGPT_WEB_MODEL,
@@ -75,14 +57,18 @@ PROFILES: dict[str, str] = {
     "codexguber": CHATGPT_WEB_MODEL,
 }
 
+PROFILE_ALIASES: dict[str, str] = {
+    "gemma4unc": "gemma4unc",
+    "chatgptweb": "chatgptweb",
+    "chatgpt_web": "chatgptweb",
+    "chatgpt": "chatgptweb",
+    "chatgpt-5.5-high-web": "chatgptweb",
+    "codexguber": "chatgptweb",
+}
+DEFAULT_PROFILE = PROFILE_ALIASES.get(DEFAULT_PROFILE, "gemma4unc")
+
 PROFILE_MENU: list[tuple[str, str]] = [
     ("gemma4unc", "Gemma4Unc"),
-    ("uncensored", "OpenYourMind"),
-    ("coder", "Coder Q4"),
-    ("coderq3", "Coder Q3"),
-    ("qwythos", "Qwythos Q5"),
-    ("mythosnano", "Mythos Nano"),
-    ("qwenvisionunc", "Qwen VL 3B"),
     ("chatgptweb", "ChatGPT Web"),
 ]
 
@@ -127,12 +113,11 @@ class ChatState:
 
 
 def profile_to_model(value: str) -> str:
-    key = (value or DEFAULT_PROFILE).strip().lower()
-    return PROFILES.get(key, value.strip() or PROFILES.get(DEFAULT_PROFILE, DEFAULT_PROFILE))
+    return PROFILES[normalize_profile(value)]
 
 
 def is_external_profile(profile: str | None) -> bool:
-    return normalize_profile(profile) in {"chatgptweb", "chatgpt_web", "chatgpt", "chatgpt-5.5-high-web", "codexguber"}
+    return normalize_profile(profile) == "chatgptweb"
 
 
 def profile_base_url(profile: str | None) -> str:
@@ -226,15 +211,55 @@ def save_state(state: dict[str, Any]) -> None:
     tmp.replace(STATE_PATH)
 
 
+def migrate_persisted_state() -> int:
+    """Normalize retired/aliased profile records without losing prompts/history."""
+    state = load_state()
+    chats = state.get("chats")
+    if not isinstance(chats, dict):
+        return 0
+    migrated = 0
+    for chat_id, raw in list(chats.items()):
+        if not isinstance(raw, dict):
+            raw = {}
+        profile = normalize_profile(raw.get("profile"))
+        model = profile_to_model(profile)
+        if raw.get("profile") == profile and raw.get("model") == model:
+            continue
+        chats[chat_id] = {
+            "profile": profile,
+            "model": model,
+            "system_prompt": raw.get("system_prompt") or DEFAULT_SYSTEM_PROMPT,
+            "history": (raw.get("history") or [])[-MAX_HISTORY_MESSAGES:],
+            "updated_at": int(time.time()),
+        }
+        migrated += 1
+    if migrated:
+        save_state(state)
+    return migrated
+
+
 def get_chat_state(chat_id: int) -> ChatState:
     state = load_state()
     raw = state.setdefault("chats", {}).setdefault(str(chat_id), {})
-    return ChatState(
-        profile=raw.get("profile") or DEFAULT_PROFILE,
-        model=raw.get("model") or profile_to_model(raw.get("profile") or DEFAULT_PROFILE),
+    profile = normalize_profile(raw.get("profile"))
+    model = profile_to_model(profile)
+    chat_state = ChatState(
+        profile=profile,
+        model=model,
         system_prompt=raw.get("system_prompt") or DEFAULT_SYSTEM_PROMPT,
         history=raw.get("history") or [],
     )
+    if raw.get("profile") != profile or raw.get("model") != model:
+        state["chats"][str(chat_id)] = {
+            "profile": chat_state.profile,
+            "model": chat_state.model,
+            "system_prompt": chat_state.system_prompt,
+            "history": chat_state.history[-MAX_HISTORY_MESSAGES:],
+            "updated_at": int(time.time()),
+        }
+        save_state(state)
+        log.info("Migrated chat_id=%s to profile=%s model=%s", chat_id, profile, model)
+    return chat_state
 
 
 def put_chat_state(chat_id: int, chat_state: ChatState) -> None:
@@ -303,7 +328,8 @@ def format_exception(exc: BaseException) -> str:
 
 
 def normalize_profile(value: str | None) -> str:
-    return (value or DEFAULT_PROFILE).strip().lower() or DEFAULT_PROFILE
+    key = (value or DEFAULT_PROFILE).strip().lower() or DEFAULT_PROFILE
+    return PROFILE_ALIASES.get(key, "gemma4unc")
 
 
 def profile_list_text(chat_state: ChatState) -> str:
@@ -578,9 +604,13 @@ async def current(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 @require_admin
 async def set_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.effective_message.reply_text("Usage: /profile qwenvisionunc")
+        await update.effective_message.reply_text("Usage: /profile gemma4unc|chatgptweb")
         return
-    profile = context.args[0].strip().lower()
+    requested = context.args[0].strip().lower()
+    if requested not in PROFILE_ALIASES:
+        await update.effective_message.reply_text("Unknown profile. Available: gemma4unc, chatgptweb")
+        return
+    profile = normalize_profile(requested)
     chat_state = get_chat_state(update.effective_chat.id)
     chat_state.profile = profile
     chat_state.model = profile_to_model(profile)
@@ -591,10 +621,14 @@ async def set_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 @require_admin
 async def set_chat_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.effective_message.reply_text("Usage: /chatmodel mythosnanoq6")
+        await update.effective_message.reply_text("Usage: /chatmodel gemma4unc|chatgptweb")
         return
-    value = context.args[0].strip()
+    value = context.args[0].strip().lower()
+    if value not in PROFILE_ALIASES:
+        await update.effective_message.reply_text("Unknown model/profile. Available: gemma4unc, chatgptweb")
+        return
     chat_state = get_chat_state(update.effective_chat.id)
+    chat_state.profile = normalize_profile(value)
     chat_state.model = profile_to_model(value)
     put_chat_state(update.effective_chat.id, chat_state)
     await update.effective_message.reply_text(f"Chat model set: {chat_state.model}")
@@ -640,7 +674,8 @@ async def script_reply(
     chat_id = update.effective_chat.id
     message_id = update.effective_message.message_id if update.effective_message else None
     chat_state = get_chat_state(chat_id)
-    profile = profile_override or (context.args[0].strip() if context.args else chat_state.profile)
+    requested_profile = profile_override or (context.args[0].strip() if context.args else chat_state.profile)
+    profile = normalize_profile(requested_profile)
     if remember_profile and use_profile and profile:
         chat_state.profile = profile.strip().lower()
         chat_state.model = profile_to_model(chat_state.profile)
@@ -1054,4 +1089,7 @@ def build_app() -> Application:
 
 
 if __name__ == "__main__":
+    migrated_count = migrate_persisted_state()
+    if migrated_count:
+        log.info("Migrated %s persisted chat state record(s)", migrated_count)
     build_app().run_polling(allowed_updates=Update.ALL_TYPES)
