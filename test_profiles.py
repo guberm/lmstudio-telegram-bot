@@ -11,6 +11,8 @@ class ProfileRemovalTests(unittest.TestCase):
         self.assertEqual([key for key, _label in bot.PROFILE_MENU], ["gemma4unc", "chatgptweb"])
         self.assertEqual(bot.normalize_profile("gemma4unc"), "gemma4unc")
         self.assertEqual(bot.normalize_profile("chatgpt_web"), "chatgptweb")
+        self.assertEqual(bot.profile_to_model("chatgptweb"), "chatgpt-5.6-sol-high-web")
+        self.assertEqual(bot.profile_to_model("chatgpt-5.5-high-web"), "chatgpt-5.6-sol-high-web")
         self.assertEqual(bot.normalize_profile("mythosnano"), "gemma4unc")
         self.assertEqual(bot.profile_to_model("coderq3"), "gemma4unc")
 
